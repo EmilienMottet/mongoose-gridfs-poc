@@ -5,9 +5,7 @@ const express = require('express');
 const trackRoute = express.Router();
 const multer = require('multer');
 
-const mongodb = require('mongodb');
-const MongoClient = require('mongodb').MongoClient;
-const ObjectID = require('mongodb').ObjectID;
+const mongoose = require('mongoose');
 
 /**
  * NodeJS Module dependencies.
@@ -20,47 +18,49 @@ const { Readable } = require('stream');
 const app = express();
 app.use('/tracks', trackRoute);
 
-/**
- * Connect Mongo Driver to MongoDB.
- */
-let db;
-MongoClient.connect('mongodb://localhost/trackDB', (err, database) => {
-  if (err) {
-    console.log('MongoDB Connection Error. Please make sure that MongoDB is running.');
-    process.exit(1);
-  }
-  db = database;
+//mongoose connect
+mongoose.connect('mongodb://localhost/trackDB').catch((err)=>{
+    console.log('*** Can Not Connect to Mongo Server:', mongo_location)
 });
+
+mongoose.connection.on('connected',function(){
+
+    //instantiate mongoose-gridfs
+    var gridfs = require('mongoose-gridfs')({
+        collection:'tracks',
+        // model:'',
+        // bucketName : 'tracks',
+        mongooseConnection: mongoose.connection
+    });
+
+    //obtain a model
+    Attachment = gridfs.model;
+
+})
 
 /**
  * GET /tracks/:trackID
  */
 trackRoute.get('/:trackID', (req, res) => {
-  try {
-    var trackID = new ObjectID(req.params.trackID);
-  } catch(err) {
-    return res.status(400).json({ message: "Invalid trackID in URL parameter. Must be a single String of 12 bytes or a string of 24 hex characters" }); 
-  }
-  res.set('content-type', 'audio/mp3');
-  res.set('accept-ranges', 'bytes');
+    res.set('content-type', 'audio/mp3');
+    res.set('accept-ranges', 'bytes');
 
-  let bucket = new mongodb.GridFSBucket(db, {
-    bucketName: 'tracks'
-  });
 
-  let downloadStream = bucket.openDownloadStream(trackID);
+    var downloadStream = Attachment.readById(req.params.trackID);
+    downloadStream.on('data', (chunk) => {
+        res.write(chunk);
+    });
 
-  downloadStream.on('data', (chunk) => {
-    res.write(chunk);
-  });
+    downloadStream.on('error', () => {
+        console.log(downloadStream == null || Attachment == null);
+        res.sendStatus(404);
+    });
 
-  downloadStream.on('error', () => {
-    res.sendStatus(404);
-  });
+    downloadStream.on('end', () => {
+        res.end();
+    });
 
-  downloadStream.on('end', () => {
-    res.end();
-  });
+
 });
 
 /**
@@ -83,22 +83,22 @@ trackRoute.post('/', (req, res) => {
     readableTrackStream.push(req.file.buffer);
     readableTrackStream.push(null);
 
-    let bucket = new mongodb.GridFSBucket(db, {
-      bucketName: 'tracks'
-    });
 
-    let uploadStream = bucket.openUploadStream(trackName);
-    let id = uploadStream.id;
-    readableTrackStream.pipe(uploadStream);
+      Attachment.write({
+          filename:trackName,
+          contentType:'audio/mp3'
+      },readableTrackStream,
+                       function(error,createdFile){
+                           var id = createdFile._id ;
+                           if (error) {
+                               res.status(500).send(error);
+                           }
+                           res.status(201).send(createdFile);
+                       }
+                       );
 
-    uploadStream.on('error', () => {
-      return res.status(500).json({ message: "Error uploading file" });
-    });
 
-    uploadStream.on('finish', () => {
-      return res.status(201).json({ message: "File uploaded successfully, stored under Mongo ObjectID: " + id });
-    });
-  });
+ });
 });
 
 app.listen(3005, () => {
